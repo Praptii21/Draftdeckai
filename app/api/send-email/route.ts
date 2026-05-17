@@ -8,6 +8,7 @@ import { logSecurityEvent } from '@/lib/security';
 import { logger } from '@/lib/logger';
 import { getRequestId } from '@/lib/request-id';
 import { incrementRequestCount, incrementErrorCount } from '@/app/api/metrics/route';
+import { withErrorHandling } from '@/lib/error-handler';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -68,7 +69,7 @@ const sendEmailSchema = z.object({
   }),
 });
 
-export async function POST(request: NextRequest) {
+async function postHandler(request: NextRequest) {
   const requestId = getRequestId(request.headers);
   const log = logger.withContext({ requestId });
   incrementRequestCount();
@@ -268,16 +269,9 @@ export async function POST(request: NextRequest) {
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }
     );
-  } catch (error) {
-    incrementErrorCount();
-    // Safe error responses: Do not leak raw provider/server internals in API responses.
-    // Keep detailed errors only in server logs.
-    log.error('Error sending email:', error);
-    logSecurityEvent('EMAIL_SEND_ERROR', { error: error instanceof Error ? error.message : 'Unknown error', ip }, ip);
-    
-    return new Response(
-      JSON.stringify({ error: 'Failed to send email. Please try again later.' }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
-    );
+    // Re-throw error so the global error handler captures request context, traces stack trace, and triggers alerts
+    throw error;
   }
 }
+
+export const POST = withErrorHandling(postHandler);
